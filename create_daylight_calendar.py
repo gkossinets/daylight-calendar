@@ -4,10 +4,49 @@ import csv
 import datetime
 import argparse
 import hashlib
+import sys
 from astral import LocationInfo
 from astral.sun import sun
 from timezonefinder import TimezoneFinder
 import pytz
+
+try:
+    from geopy.geocoders import Nominatim
+    GEOPY_AVAILABLE = True
+except ImportError:
+    GEOPY_AVAILABLE = False
+
+def geocode_location(location_name):
+    """
+    Geocode a location name to latitude and longitude using Nominatim.
+
+    Args:
+        location_name: Name of the location (e.g., "Brooklyn", "London, UK")
+
+    Returns:
+        tuple: (latitude, longitude, display_name)
+
+    Raises:
+        ValueError: If location cannot be found or geopy is not available
+    """
+    if not GEOPY_AVAILABLE:
+        raise ValueError(
+            "geopy library is required for location name lookup. "
+            "Install it with: pip install geopy"
+        )
+
+    try:
+        geolocator = Nominatim(user_agent="daylight-calendar-generator")
+        location = geolocator.geocode(location_name, timeout=10)
+
+        if location is None:
+            raise ValueError(f"Could not find location: {location_name}")
+
+        print(f"Found location: {location.address}")
+        return location.latitude, location.longitude, location.address
+
+    except Exception as e:
+        raise ValueError(f"Error geocoding location '{location_name}': {e}")
 
 # Generate an ICS file string manually to avoid extra dependencies
 def generate_ics_content(events):
@@ -189,29 +228,39 @@ if __name__ == "__main__":
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # ICS format with single daylight event per day (default)
+  # Using location name (requires geopy library)
+  %(prog)s --location "Brooklyn, NY" -s 2026-01-01 -e 2026-05-01
+
+  # Using exact coordinates
   %(prog)s --lat 40.66545 --lon -73.98875 -s 2026-01-01 -e 2026-05-01
 
   # ICS with separate 30-minute sunrise and sunset events
-  %(prog)s --lat 40.66545 --lon -73.98875 -s 2026-01-01 -e 2026-05-01 --separate-events
+  %(prog)s --location "London, UK" -s 2026-01-01 -e 2026-05-01 --separate-events
 
   # CSV format for Google Calendar import
-  %(prog)s --lat 40.66545 --lon -73.98875 -s 2026-01-01 -e 2026-05-01 -f csv -o brooklyn.csv
+  %(prog)s --location "Paris" -s 2026-01-01 -e 2026-05-01 -f csv -o paris.csv
         """
     )
 
-    parser.add_argument(
+    # Create mutually exclusive group for location specification
+    location_group = parser.add_mutually_exclusive_group(required=True)
+
+    location_group.add_argument(
+        '-l', '--location',
+        type=str,
+        help='Location name (e.g., "Brooklyn", "London, UK", "Paris, France"). Requires geopy library.'
+    )
+
+    location_group.add_argument(
         '--lat', '--latitude',
         type=float,
-        required=True,
-        help='Latitude of the location (e.g., 40.66545 for Brooklyn, NY)'
+        help='Latitude of the location (e.g., 40.66545 for Brooklyn, NY). Must be used with --lon.'
     )
 
     parser.add_argument(
         '--lon', '--longitude',
         type=float,
-        required=True,
-        help='Longitude of the location (e.g., -73.98875 for Brooklyn, NY)'
+        help='Longitude of the location (e.g., -73.98875 for Brooklyn, NY). Must be used with --lat.'
     )
 
     parser.add_argument(
@@ -257,10 +306,25 @@ Examples:
     except ValueError as e:
         parser.error(f"Invalid date format: {e}")
 
+    # Resolve location to coordinates
+    if args.location:
+        # Use location name - geocode it
+        try:
+            lat, lon, address = geocode_location(args.location)
+        except ValueError as e:
+            parser.error(str(e))
+            sys.exit(1)
+    else:
+        # Use coordinates - validate that both lat and lon are provided
+        if args.lat is None or args.lon is None:
+            parser.error("When using coordinates, both --lat and --lon must be specified")
+        lat = args.lat
+        lon = args.lon
+
     # Determine output filename if not specified
     if args.output is None:
         extension = 'ics' if args.format == 'ics' else 'csv'
         args.output = f'daylight_calendar.{extension}'
 
-    generate_daylight_calendar(args.lat, args.lon, args.start, args.end,
+    generate_daylight_calendar(lat, lon, args.start, args.end,
                                args.output, args.separate_events, args.format)
