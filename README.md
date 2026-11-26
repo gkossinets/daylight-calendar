@@ -2,7 +2,7 @@
 
 Generate a calendar of daylight (sunrise to sunset) for any place and date range, as an `.ics` file to import into Google Calendar or Apple Calendar, or as CSV.
 
-With daylight showing as a block on each day of your calendar, you can see at a glance when it's light out next to your schedule. That makes it easy to plan runs, walks and other time outside, especially as the days get shorter.
+With daylight showing as a block on each day of your calendar, you can see at a glance when it's light out next to your schedule. That makes it easy to plan runs, walks and other time outside, especially as the days get shorter. It works for planning location photography too: use `--separate-events` to get a block for the half hour before sunrise and before sunset.
 
 <!-- TODO: screenshot of an imported calendar (week view showing the daylight blocks) -->
 
