@@ -5,8 +5,10 @@ import datetime
 import argparse
 import hashlib
 import sys
-from astral import LocationInfo
+from astral import LocationInfo, Observer, SunDirection
 from astral.sun import sun
+from astral.sun import blue_hour as blue_hour_times
+from astral.sun import golden_hour as golden_hour_times
 from timezonefinder import TimezoneFinder
 from zoneinfo import ZoneInfo
 
@@ -86,8 +88,53 @@ def generate_uid(date, event_type, lat, lng):
     hash_suffix = hashlib.md5(uid_string.encode()).hexdigest()[:8]
     return f"{date.strftime('%Y%m%d')}-{event_type}-{hash_suffix}@daylight-calendar"
 
+PHOTO_HOURS = {
+    # name: (astral function, summary, sun elevation band as astral defines it)
+    'golden-hour': (golden_hour_times, 'Golden hour', '4° below to 6° above the horizon'),
+    'blue-hour': (blue_hour_times, 'Blue hour', '6° to 4° below the horizon'),
+}
+
+
+def photo_hour_events(observer: Observer, date: datetime.date, tz: datetime.tzinfo,
+                      golden_hour: bool, blue_hour: bool) -> list[dict]:
+    """Build morning and evening golden and/or blue hour events for one day.
+
+    Args:
+        observer: Astral observer for the location.
+        date: The day to calculate for.
+        tz: Time zone for the event times.
+        golden_hour: Include golden hour events.
+        blue_hour: Include blue hour events.
+
+    Returns:
+        Event dictionaries in the same shape as the daylight events. A period
+        the sun doesn't reach on this day (common near the poles) is left out.
+    """
+    wanted = [name for name, enabled in (('golden-hour', golden_hour), ('blue-hour', blue_hour)) if enabled]
+    events = []
+    for name in wanted:
+        times_for, summary, band = PHOTO_HOURS[name]
+        for direction, part in ((SunDirection.RISING, 'morning'), (SunDirection.SETTING, 'evening')):
+            try:
+                start, end = times_for(observer, date, direction, tz)
+            except ValueError:
+                # astral's error here is a bare "math domain error"; say what it means.
+                print(f"Skipping {part} {summary.lower()} on {date}: the sun doesn't reach it",
+                      file=sys.stderr)
+                continue
+            events.append({
+                'summary': summary,
+                'description': f"{part.capitalize()} {summary.lower()}: sun {band}",
+                'start': start,
+                'end': end,
+                'type': f"{name}-{part}",
+                'date': date,
+            })
+    return events
+
+
 def generate_daylight_calendar(lat, lng, start_date_str, end_date_str, filename="daylight_calendar.ics",
-                               separate_events=False, format_type="ics"):
+                               separate_events=False, format_type="ics", golden_hour=False, blue_hour=False):
     """
     Generate a calendar file with daylight hours for a specific location and date range.
 
@@ -99,6 +146,8 @@ def generate_daylight_calendar(lat, lng, start_date_str, end_date_str, filename=
         filename: Output filename
         separate_events: If True, create separate sunrise/sunset events; else single daylight event
         format_type: Output format - "ics" or "csv"
+        golden_hour: If True, also add morning and evening golden hour events
+        blue_hour: If True, also add morning and evening blue hour events
     """
     # 1. Setup Timezone and Location
     tf = TimezoneFinder()
@@ -138,7 +187,13 @@ def generate_daylight_calendar(lat, lng, start_date_str, end_date_str, filename=
 
             sunrise = s['sunrise']
             sunset = s['sunset']
+        except ValueError as e:
+            # Polar night or midnight sun: no daylight events, but blue or golden
+            # hour may still happen, so don't skip the whole day.
+            print(f"Skipping daylight on {current_date}: {e}", file=sys.stderr)
+            sunrise = sunset = None
 
+        if sunrise is not None:
             if separate_events:
                 # Sunrise event: 30 minutes long, ending at sunrise
                 sunrise_start = sunrise - datetime.timedelta(minutes=30)
@@ -172,11 +227,13 @@ def generate_daylight_calendar(lat, lng, start_date_str, end_date_str, filename=
                     'date': current_date
                 })
 
-        except Exception as e:
-            # Polar regions or calculation errors
-            print(f"Skipping {current_date}: {e}")
+        events_data.extend(photo_hour_events(location.observer, current_date, tz, golden_hour, blue_hour))
 
         current_date += datetime.timedelta(days=1)
+
+    # Golden and blue hour overlap the daylight events in time, so order
+    # by start rather than by the order the events were generated in.
+    events_data.sort(key=lambda evt: evt['start'])
 
     # 4. Write output file based on format
     if format_type == "ics":
@@ -298,6 +355,18 @@ Examples:
         help='Create separate 30-minute sunrise and sunset events (both ending at actual time) instead of a single daylight event'
     )
 
+    parser.add_argument(
+        '--golden-hour',
+        action='store_true',
+        help='Also add morning and evening golden hour events (sun 4° below to 6° above the horizon)'
+    )
+
+    parser.add_argument(
+        '--blue-hour',
+        action='store_true',
+        help='Also add morning and evening blue hour events (sun 6° to 4° below the horizon)'
+    )
+
     args = parser.parse_args()
 
     # Validate date format
@@ -328,4 +397,5 @@ Examples:
         args.output = f'daylight_calendar.{extension}'
 
     generate_daylight_calendar(lat, lon, args.start, args.end,
-                               args.output, args.separate_events, args.format)
+                               args.output, args.separate_events, args.format,
+                               golden_hour=args.golden_hour, blue_hour=args.blue_hour)

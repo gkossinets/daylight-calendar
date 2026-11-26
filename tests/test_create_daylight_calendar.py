@@ -107,3 +107,65 @@ def test_does_not_depend_on_pytz() -> None:
     # The standard library's zoneinfo (3.9+) replaces pytz; one less dependency.
     source = SCRIPT.read_text()
     assert "pytz" not in source
+
+
+def _times(rows: list[dict[str, str]], subject: str) -> list[tuple[str, str]]:
+    return [(r["Start Time"], r["End Time"]) for r in rows if r["Subject"] == subject]
+
+
+def test_golden_hour_events(tmp_path: Path) -> None:
+    out = tmp_path / "out.csv"
+    cdc.generate_daylight_calendar(*BROOKLYN, "2026-01-01", "2026-01-01", str(out),
+                                   format_type="csv", golden_hour=True)
+    rows = _read_csv(out)
+    # astral's golden hour: sun from 4 degrees below to 6 degrees above the horizon.
+    assert _times(rows, "Golden hour") == [("07:00:20", "08:02:18"), ("15:57:04", "16:59:02")]
+    assert len(_times(rows, "Daylight")) == 1  # added alongside, not instead
+
+
+def test_blue_hour_events(tmp_path: Path) -> None:
+    out = tmp_path / "out.csv"
+    cdc.generate_daylight_calendar(*BROOKLYN, "2026-01-01", "2026-01-01", str(out),
+                                   format_type="csv", blue_hour=True)
+    rows = _read_csv(out)
+    assert _times(rows, "Blue hour") == [("06:48:45", "07:00:20"), ("16:59:02", "17:10:37")]
+
+
+def test_events_are_in_chronological_order(tmp_path: Path) -> None:
+    out = tmp_path / "out.csv"
+    cdc.generate_daylight_calendar(*BROOKLYN, "2026-01-01", "2026-01-02", str(out), format_type="csv",
+                                   separate_events=True, golden_hour=True, blue_hour=True)
+    starts = [(r["Start Date"], r["Start Time"]) for r in _read_csv(out)]
+    assert len(starts) == 2 * 6
+    assert starts == sorted(starts)
+
+
+def test_photo_events_have_distinct_stable_uids(tmp_path: Path) -> None:
+    out = tmp_path / "out.ics"
+    cdc.generate_daylight_calendar(*BROOKLYN, "2026-01-01", "2026-01-01", str(out),
+                                   golden_hour=True, blue_hour=True)
+    uids = [l for l in out.read_text().splitlines() if l.startswith("UID:")]
+    assert len(uids) == 5
+    assert len(set(uids)) == 5
+
+
+def test_polar_night_keeps_blue_hour(tmp_path: Path) -> None:
+    # In Tromsø in December the sun never rises (no daylight or golden hour),
+    # but it does reach the blue-hour band. Missing events are skipped one by one.
+    out = tmp_path / "out.csv"
+    cdc.generate_daylight_calendar(69.6492, 18.9553, "2026-12-20", "2026-12-20", str(out),
+                                   format_type="csv", golden_hour=True, blue_hour=True)
+    rows = _read_csv(out)
+    assert [r["Subject"] for r in rows] == ["Blue hour", "Blue hour"]
+
+
+def test_cli_golden_and_blue_hour_flags(tmp_path: Path) -> None:
+    result = subprocess.run(
+        [sys.executable, str(SCRIPT), "--lat", str(BROOKLYN[0]), "--lon", str(BROOKLYN[1]),
+         "-s", "2026-01-01", "-e", "2026-01-01", "-f", "csv", "--golden-hour", "--blue-hour"],
+        capture_output=True, text=True, cwd=tmp_path,
+    )
+    assert result.returncode == 0, result.stderr
+    subjects = [r["Subject"] for r in _read_csv(tmp_path / "daylight_calendar.csv")]
+    assert subjects.count("Golden hour") == 2
+    assert subjects.count("Blue hour") == 2
