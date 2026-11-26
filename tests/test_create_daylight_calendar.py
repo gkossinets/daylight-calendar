@@ -1,6 +1,7 @@
 """Characterization tests for create_daylight_calendar.py."""
 
 import csv
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -60,7 +61,8 @@ def test_ics_structure(tmp_path: Path) -> None:
     assert "DTSTART;TZID=America/New_York:20260101T072008\r\n" in raw
     assert "DTEND;TZID=America/New_York:20260101T163914\r\n" in raw
     dtstamp = next(line for line in raw.split("\r\n") if line.startswith("DTSTAMP:"))
-    assert len(dtstamp) == len("DTSTAMP:20260101T000000")
+    # RFC 5545: DTSTAMP must be in UTC, written with a trailing "Z".
+    assert re.fullmatch(r"DTSTAMP:\d{8}T\d{6}Z", dtstamp), dtstamp
 
 
 def test_uids_are_stable(tmp_path: Path) -> None:

@@ -126,7 +126,8 @@ def generate_daylight_calendar(lat, lng, start_date_str, end_date_str, filename=
 
     # 3. Collect events data
     events_data = []
-    dtstamp = format_datetime_ics(datetime.datetime.now(datetime.timezone.utc))
+    # RFC 5545 requires DTSTAMP in UTC form, marked with a trailing "Z".
+    dtstamp = format_datetime_ics(datetime.datetime.now(datetime.timezone.utc)) + "Z"
 
     current_date = start_date
 
