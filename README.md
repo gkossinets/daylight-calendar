@@ -4,9 +4,9 @@ Generate a calendar of daylight (sunrise to sunset) for any place and date range
 
 With daylight showing as a block on each day of your calendar, you can see at a glance when it's light out next to your schedule. That makes it easy to plan runs, walks and other time outside, especially as the days get shorter. It works for planning location photography too: add `--golden-hour` and `--blue-hour` to see the best light each morning and evening.
 
-![A week of sunrise and sunset events for Brooklyn in Google Calendar](screenshot.png)
+![A week of daylight blocks for Brooklyn in Google Calendar](screenshot.png)
 
-*Brooklyn, January 2026, generated with `--separate-events` and imported into Google Calendar.*
+*Brooklyn, early December 2026, with the default settings, imported into Google Calendar.*
 
 ## Install
 
