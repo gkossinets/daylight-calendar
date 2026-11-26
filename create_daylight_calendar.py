@@ -8,7 +8,7 @@ import sys
 from astral import LocationInfo
 from astral.sun import sun
 from timezonefinder import TimezoneFinder
-import pytz
+from zoneinfo import ZoneInfo
 
 try:
     from geopy.geocoders import Nominatim
@@ -109,7 +109,7 @@ def generate_daylight_calendar(lat, lng, start_date_str, end_date_str, filename=
         timezone_str = "UTC"
 
     print(f"Detected Timezone: {timezone_str}")
-    tz = pytz.timezone(timezone_str)
+    tz = ZoneInfo(timezone_str)
 
     # Create an Astral location object
     location = LocationInfo(
@@ -126,7 +126,7 @@ def generate_daylight_calendar(lat, lng, start_date_str, end_date_str, filename=
 
     # 3. Collect events data
     events_data = []
-    dtstamp = format_datetime_ics(datetime.datetime.now(pytz.UTC))
+    dtstamp = format_datetime_ics(datetime.datetime.now(datetime.timezone.utc))
 
     current_date = start_date
 

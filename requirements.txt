@@ -1,0 +1,6 @@
+astral>=3.2
+timezonefinder>=8.2.1
+# Windows has no system time zone database for zoneinfo; macOS and Linux do.
+tzdata; sys_platform == "win32"
+# Optional: only needed for --location (place-name lookup).
+geopy>=2.4.1

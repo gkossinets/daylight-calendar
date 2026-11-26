@@ -1,0 +1,107 @@
+"""Characterization tests for create_daylight_calendar.py."""
+
+import csv
+import subprocess
+import sys
+from pathlib import Path
+
+import create_daylight_calendar as cdc
+
+SCRIPT = Path(__file__).resolve().parent.parent / "create_daylight_calendar.py"
+
+# Brooklyn, NY: the coordinates used in the script's own --help examples.
+BROOKLYN = (40.66545, -73.98875)
+
+
+def _read_csv(path: Path) -> list[dict[str, str]]:
+    with open(path, newline="", encoding="utf-8") as f:
+        return list(csv.DictReader(f))
+
+
+def test_csv_daylight_event_times(tmp_path: Path) -> None:
+    out = tmp_path / "out.csv"
+    cdc.generate_daylight_calendar(*BROOKLYN, "2026-01-01", "2026-01-02", str(out), format_type="csv")
+    rows = _read_csv(out)
+    assert len(rows) == 2
+    first = rows[0]
+    assert first["Subject"] == "Daylight"
+    assert first["Start Date"] == "2026-01-01"
+    # Values match the owner's previously generated brooklyn2026.csv.
+    assert first["Start Time"] == "07:20:08"
+    assert first["End Time"] == "16:39:14"
+
+
+def test_csv_handles_dst_transition(tmp_path: Path) -> None:
+    # 2026-03-08 is the US spring-forward date; times must be in local (EDT) time.
+    out = tmp_path / "out.csv"
+    cdc.generate_daylight_calendar(*BROOKLYN, "2026-03-07", "2026-03-08", str(out), format_type="csv")
+    rows = _read_csv(out)
+    est_sunrise, edt_sunrise = rows[0]["Start Time"], rows[1]["Start Time"]
+    assert est_sunrise.startswith("06:")
+    assert edt_sunrise.startswith("07:")
+
+
+def test_separate_events_end_at_sun_times(tmp_path: Path) -> None:
+    out = tmp_path / "out.csv"
+    cdc.generate_daylight_calendar(*BROOKLYN, "2026-01-01", "2026-01-01", str(out),
+                                   separate_events=True, format_type="csv")
+    sunrise, sunset = _read_csv(out)
+    assert (sunrise["Subject"], sunrise["Start Time"], sunrise["End Time"]) == ("Sunrise", "06:50:08", "07:20:08")
+    assert (sunset["Subject"], sunset["Start Time"], sunset["End Time"]) == ("Sunset", "16:09:14", "16:39:14")
+
+
+def test_ics_structure(tmp_path: Path) -> None:
+    out = tmp_path / "out.ics"
+    cdc.generate_daylight_calendar(*BROOKLYN, "2026-01-01", "2026-01-03", str(out))
+    raw = out.read_bytes().decode("utf-8")
+    assert raw.startswith("BEGIN:VCALENDAR\r\n")
+    assert raw.endswith("END:VCALENDAR\r\n")
+    assert raw.count("BEGIN:VEVENT") == 3
+    assert "DTSTART;TZID=America/New_York:20260101T072008\r\n" in raw
+    assert "DTEND;TZID=America/New_York:20260101T163914\r\n" in raw
+    dtstamp = next(line for line in raw.split("\r\n") if line.startswith("DTSTAMP:"))
+    assert len(dtstamp) == len("DTSTAMP:20260101T000000")
+
+
+def test_uids_are_stable(tmp_path: Path) -> None:
+    a, b = tmp_path / "a.ics", tmp_path / "b.ics"
+    for path in (a, b):
+        cdc.generate_daylight_calendar(*BROOKLYN, "2026-01-01", "2026-01-02", str(path))
+
+    def uids(path: Path) -> list[str]:
+        return [l for l in path.read_text().splitlines() if l.startswith("UID:")]
+
+    assert uids(a) == uids(b)
+    assert len(set(uids(a))) == 2
+
+
+def test_polar_night_days_are_skipped(tmp_path: Path) -> None:
+    # Tromsø has no sunrise in mid-December; those days are skipped, not fatal.
+    out = tmp_path / "out.csv"
+    cdc.generate_daylight_calendar(69.6492, 18.9553, "2026-12-20", "2026-12-21", str(out), format_type="csv")
+    assert _read_csv(out) == []
+
+
+def test_cli_requires_both_lat_and_lon(tmp_path: Path) -> None:
+    result = subprocess.run(
+        [sys.executable, str(SCRIPT), "--lat", "40.7", "-s", "2026-01-01", "-e", "2026-01-02"],
+        capture_output=True, text=True, cwd=tmp_path,
+    )
+    assert result.returncode == 2
+    assert "both --lat and --lon" in result.stderr
+
+
+def test_cli_default_output_name(tmp_path: Path) -> None:
+    result = subprocess.run(
+        [sys.executable, str(SCRIPT), "--lat", str(BROOKLYN[0]), "--lon", str(BROOKLYN[1]),
+         "-s", "2026-01-01", "-e", "2026-01-01", "-f", "csv"],
+        capture_output=True, text=True, cwd=tmp_path,
+    )
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "daylight_calendar.csv").exists()
+
+
+def test_does_not_depend_on_pytz() -> None:
+    # The standard library's zoneinfo (3.9+) replaces pytz; one less dependency.
+    source = SCRIPT.read_text()
+    assert "pytz" not in source
