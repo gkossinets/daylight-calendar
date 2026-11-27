@@ -50,7 +50,7 @@ python3 create_daylight_calendar.py --location "Paris" -s 2026-01-01 -e 2026-03-
 
 Golden and blue hour use the definitions of the [astral](https://astral.readthedocs.io/) library. Morning blue hour runs straight into golden hour, and evening golden hour into blue hour. Because golden hour starts with the sun slightly below the horizon, it overlaps sunrise and sunset.
 
-The time zone is detected from the coordinates, and times are local, including across daylight saving changes. Events are private and marked as free, so they don't block your calendar. Events that don't happen on a given day are skipped. Near the poles, a day can have no sunrise yet still have a blue hour.
+The time zone is detected from the coordinates, and times are local, including across daylight saving changes. Events are private and marked as free, so they don't block your calendar. Events that don't happen on a given day are skipped. Near the poles, a day can have no sunrise yet still have a blue hour. Known limitation: near the Arctic Circle in summer, when sunset falls around midnight, `--separate-events` can miss a sunset or repeat a sunrise a few minutes apart on a few days.
 
 **Importing:** in Google Calendar, go to Settings → Import & export and consider importing into a new calendar of its own, so you can hide or delete it in one step. In Apple Calendar, use File → Import. The CSV columns follow Google Calendar's CSV import format.
 
