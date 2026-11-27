@@ -5,8 +5,11 @@ import datetime
 import argparse
 import hashlib
 import sys
+from typing import Callable, Optional
 from astral import LocationInfo, Observer, SunDirection
-from astral.sun import sun
+from astral.sun import sunrise as sunrise_time
+from astral.sun import sunset as sunset_time
+from astral.sun import time_of_transit, SUN_APPARENT_RADIUS
 from astral.sun import blue_hour as blue_hour_times
 from astral.sun import golden_hour as golden_hour_times
 from timezonefinder import TimezoneFinder
@@ -87,6 +90,59 @@ def generate_uid(date, event_type, lat, lng):
     uid_string = f"{date.isoformat()}-{event_type}-{lat}-{lng}"
     hash_suffix = hashlib.md5(uid_string.encode()).hexdigest()[:8]
     return f"{date.strftime('%Y%m%d')}-{event_type}-{hash_suffix}@daylight-calendar"
+
+def sun_time(time_for: Callable[..., datetime.datetime], observer: Observer,
+             date: datetime.date, tz: datetime.tzinfo) -> Optional[datetime.datetime]:
+    """Return astral's sunrise or sunset for a local date, or None if it doesn't happen.
+
+    Args:
+        time_for: astral's ``sunrise`` or ``sunset`` function.
+        observer: Astral observer for the location.
+        date: The local day to calculate for.
+        tz: Time zone for the result.
+
+    Returns:
+        The time, or None when the sun doesn't rise or set that day (polar
+        night or midnight sun).
+    """
+    # Don't use astral's sun(): it also computes civil dawn and dusk and raises
+    # if either is missing, which drops sunrise and sunset in white nights.
+    try:
+        return time_for(observer, date, tz)
+    except ValueError:
+        return None
+
+
+def sunset_after(observer: Observer, sunrise: datetime.datetime,
+                 tz: datetime.tzinfo) -> Optional[datetime.datetime]:
+    """Return the first sunset within 24 hours after a sunrise.
+
+    Args:
+        observer: Astral observer for the location.
+        sunrise: The sunrise the daylight period starts with.
+        tz: Time zone for the result.
+
+    Returns:
+        The sunset that ends this sunrise's daylight, or None if the sun
+        doesn't set within a day (the start of midnight sun).
+    """
+    # astral's sunset() gives at most one sunset per local date. Near the
+    # Arctic Circle in summer, sunset drifts back and forth across midnight:
+    # one date's sunset can belong to the previous evening, and another date
+    # can have two sunsets, one of which sunset() never returns. So take the
+    # raw transit for the surrounding UTC dates and pick the first one after
+    # sunrise, the same calculation sunset() itself uses.
+    utc_date = sunrise.astimezone(datetime.timezone.utc).date()
+    candidates = []
+    for offset in (-1, 0, 1):
+        try:
+            candidates.append(time_of_transit(observer, utc_date + datetime.timedelta(days=offset),
+                                              90.0 + SUN_APPARENT_RADIUS, SunDirection.SETTING))
+        except ValueError:
+            continue  # the sun doesn't set on that date
+    later = [t for t in candidates if sunrise < t < sunrise + datetime.timedelta(days=1)]
+    return min(later).astimezone(tz) if later else None
+
 
 PHOTO_HOURS = {
     # name: (astral function, summary, sun elevation band as astral defines it)
@@ -181,20 +237,16 @@ def generate_daylight_calendar(lat, lng, start_date_str, end_date_str, filename=
     current_date = start_date
 
     while current_date <= end_date:
-        try:
-            # Calculate sun data for the specific date
-            s = sun(location.observer, date=current_date, tzinfo=tz)
+        sunrise = sun_time(sunrise_time, location.observer, current_date, tz)
+        sunset = sun_time(sunset_time, location.observer, current_date, tz)
+        # Polar night or midnight sun: skip only the missing events, since blue
+        # or golden hour may still happen.
+        missing = [name for name, time in (('sunrise', sunrise), ('sunset', sunset)) if time is None]
+        if missing:
+            print(f"No {' or '.join(missing)} on {current_date}", file=sys.stderr)
 
-            sunrise = s['sunrise']
-            sunset = s['sunset']
-        except ValueError as e:
-            # Polar night or midnight sun: no daylight events, but blue or golden
-            # hour may still happen, so don't skip the whole day.
-            print(f"Skipping daylight on {current_date}: {e}", file=sys.stderr)
-            sunrise = sunset = None
-
-        if sunrise is not None:
-            if separate_events:
+        if separate_events:
+            if sunrise is not None:
                 # Sunrise event: 30 minutes long, ending at sunrise
                 sunrise_start = sunrise - datetime.timedelta(minutes=30)
                 events_data.append({
@@ -206,6 +258,7 @@ def generate_daylight_calendar(lat, lng, start_date_str, end_date_str, filename=
                     'date': current_date
                 })
 
+            if sunset is not None:
                 # Sunset event: 30 minutes long, ending at sunset
                 sunset_start = sunset - datetime.timedelta(minutes=30)
                 events_data.append({
@@ -216,13 +269,18 @@ def generate_daylight_calendar(lat, lng, start_date_str, end_date_str, filename=
                     'type': 'sunset',
                     'date': current_date
                 })
+        elif sunrise is not None:
+            daylight_end = sunset_after(location.observer, sunrise, tz)
+            if daylight_end is None:
+                print(f"Skipping daylight on {current_date}: the sun rises but doesn't set",
+                      file=sys.stderr)
             else:
                 # Single daylight event from sunrise to sunset
                 events_data.append({
                     'summary': 'Daylight',
                     'description': 'Daylight hours from sunrise to sunset',
                     'start': sunrise,
-                    'end': sunset,
+                    'end': daylight_end,
                     'type': 'daylight',
                     'date': current_date
                 })

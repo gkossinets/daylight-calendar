@@ -169,3 +169,44 @@ def test_cli_golden_and_blue_hour_flags(tmp_path: Path) -> None:
     subjects = [r["Subject"] for r in _read_csv(tmp_path / "daylight_calendar.csv")]
     assert subjects.count("Golden hour") == 2
     assert subjects.count("Blue hour") == 2
+
+
+# Reykjavik, Iceland: in midsummer the sun sets but never drops 6° below the
+# horizon, so there is no civil dawn or dusk, and sunset falls just after midnight.
+REYKJAVIK = (64.1466, -21.9426)
+
+
+def test_white_nights_keep_daylight(tmp_path: Path) -> None:
+    # Daylight runs from sunrise to the next sunset, which is after midnight here.
+    out = tmp_path / "out.csv"
+    cdc.generate_daylight_calendar(*REYKJAVIK, "2026-06-20", "2026-06-21", str(out), format_type="csv")
+    rows = _read_csv(out)
+    spans = [(r["Start Date"], r["Start Time"], r["End Date"], r["End Time"]) for r in rows]
+    assert spans == [
+        ("2026-06-20", "02:56:15", "2026-06-21", "00:02:38"),
+        ("2026-06-21", "02:56:20", "2026-06-22", "00:02:50"),
+    ]
+
+
+def test_white_nights_keep_separate_sunrise_and_sunset(tmp_path: Path) -> None:
+    out = tmp_path / "out.csv"
+    cdc.generate_daylight_calendar(*REYKJAVIK, "2026-06-21", "2026-06-21", str(out),
+                                   format_type="csv", separate_events=True)
+    rows = _read_csv(out)
+    events = [(r["Subject"], r["End Date"], r["End Time"]) for r in rows]
+    # The sunset that falls on June 21 is the one just after midnight.
+    assert events == [("Sunset", "2026-06-21", "00:02:38"), ("Sunrise", "2026-06-21", "02:56:20")]
+
+
+def test_white_nights_daylight_never_overlaps(tmp_path: Path) -> None:
+    # Sunset drifts back and forth across midnight, so one local date (June 28)
+    # has two sunsets and astral's per-date sunset() returns only one of them.
+    # June 27's daylight must end at the sunset just after midnight, not the next evening.
+    out = tmp_path / "out.csv"
+    cdc.generate_daylight_calendar(*REYKJAVIK, "2026-06-01", "2026-07-31", str(out), format_type="csv")
+    rows = _read_csv(out)
+    june_27 = next(r for r in rows if r["Start Date"] == "2026-06-27")
+    assert (june_27["End Date"], june_27["End Time"]) == ("2026-06-28", "00:00:11")
+    spans = [(r["Start Date"] + r["Start Time"], r["End Date"] + r["End Time"]) for r in rows]
+    assert len(spans) == 61
+    assert all(prev_end < start for (_, prev_end), (start, _) in zip(spans, spans[1:]))
